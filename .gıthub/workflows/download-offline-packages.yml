@@ -1,0 +1,59 @@
+name: Download Offline Packages
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'package.json'
+      - 'modules-list.json'
+
+jobs:
+  download-offline-pack:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download all npm packages (.tgz)
+        run: |
+          mkdir -p offline-packages
+          cd offline-packages
+
+          # npm pack ile tam bağımlılık ağacını indir
+          npm pack $(node -e "
+            const pkg = require('../package.json');
+            const deps = {...pkg.dependencies, ...pkg.devDependencies};
+            console.log(Object.entries(deps).map(([k,v]) => \`\${k}@\${v}\`).join(' '));
+          ")
+
+          # Ayrıca tüm transitive bağımlılıkların tgz arşivlerini yakalamak için npm cache oluştur
+          npm install --prefix temp_install $(node -e "
+            const pkg = require('../package.json');
+            const deps = {...pkg.dependencies, ...pkg.devDependencies};
+            console.log(Object.entries(deps).map(([k,v]) => \`\${k}@\${v}\`).join(' '));
+          ") --ignore-scripts
+
+          # npm cache içerisindeki tüm tgz dosyalarını topla
+          cd temp_install
+          npx make-fetch-happen --fetch-retry=2 || true
+          find node_modules -name "*.tgz" -exec cp {} ../ \; 2>/dev/null || true
+          cd ..
+          rm -rf temp_install
+
+      - name: Archive packages into zip
+        run: |
+          zip -r kortex-offline-packages.zip offline-packages/
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kortex-offline-packages
+          path: kortex-offline-packages.zip
+          retention-days: 7
